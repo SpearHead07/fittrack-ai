@@ -1,0 +1,6 @@
+@"
+fittrack-api/
+*.py
+*.sql
+__pycache__/
+"@ | Out-File -FilePath .vercelignore -Encoding utf8
