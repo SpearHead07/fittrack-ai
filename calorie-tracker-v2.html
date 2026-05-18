@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>FitTrack — Day 2 (Auth + API)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- Supabase JS client (ESM via esm.sh) -->
+<script type="module">
+  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+  // ---- CONFIGURE THESE TWO ----
+  const SUPABASE_URL = 'https://ldeanehbpifnlbaciziy.supabase.co'
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxkZWFuZWhicGlmbmxiYWNpeml5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5MTY0NTIsImV4cCI6MjA5NDQ5MjQ1Mn0.bv_GOBfm8QemK2QnvFWkhN1qlx7WHCdiGme0BWkVC-g'
+  // -----------------------------
+  window.sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  window.dispatchEvent(new Event('sb-ready'))
+</script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+    background:
+      radial-gradient(ellipse 80% 60% at 15% 20%, #d946ef 0%, transparent 55%),
+      radial-gradient(ellipse 80% 60% at 85% 85%, #3b82f6 0%, transparent 55%),
+      linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+    background-attachment: fixed;
+  }
+  .glass { background: rgba(255,255,255,0.92); backdrop-filter: blur(8px); }
+  .glass-dark { background: rgba(255,255,255,0.12); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.18); }
+  .compact-card { padding: 0.875rem 1rem; }
+  .compact-card .item-row { padding: 4px 6px; font-size: 12px; }
+  .ring-progress { transition: stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1); }
+  @keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0);} }
+  .fade-in { animation: fadeInUp 0.5s ease forwards; }
+  @keyframes pulseSoft { 0%,100% { transform: scale(1);} 50% { transform: scale(1.04);} }
+  .pulse-soft { animation: pulseSoft 2.4s ease-in-out infinite; }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  .quote-shimmer { background: linear-gradient(90deg,#7c3aed,#a855f7,#7c3aed); background-size: 200% 100%; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 4s linear infinite; }
+  .macro-bar-fill { transition: width 0.8s cubic-bezier(0.4,0,0.2,1); }
+  .meal-card:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(124,58,237,0.12); }
+  .meal-card { transition: all 0.25s ease; }
+  .btn-primary { background: linear-gradient(135deg,#7c3aed,#a855f7); transition: all 0.2s ease; }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(124,58,237,0.35); }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: #c4b5fd; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+// =============================================================
+// CONFIG
+// =============================================================
+const API_BASE = 'http://localhost:8000';
+const todayKey = () => new Date().toISOString().split('T')[0];
+
+// =============================================================
+// API helper — attaches the Supabase JWT to every request.
+// =============================================================
+async function api(path, opts = {}) {
+  const { data: { session } } = await window.sb.auth.getSession();
+  if (!session) throw new Error('Not logged in');
+  const res = await fetch(API_BASE + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + session.access_token,
+      ...(opts.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+// =============================================================
+// FOOD & EXERCISE DATABASES (still client-side for now;
+// Day 5 moves these to a vector DB for RAG)
+// =============================================================
+const FOOD_DB = [
+  { name: 'Oatmeal (1 cup)', calories: 150, carbs: 27, protein: 5, fat: 3 },
+  { name: 'Banana', calories: 105, carbs: 27, protein: 1, fat: 0 },
+  { name: 'Eggs (2 large)', calories: 140, carbs: 1, protein: 12, fat: 10 },
+  { name: 'Greek Yogurt (1 cup)', calories: 100, carbs: 6, protein: 17, fat: 0.5 },
+  { name: 'Apple', calories: 95, carbs: 25, protein: 0.5, fat: 0.3 },
+  { name: 'Chicken Breast (100g)', calories: 165, carbs: 0, protein: 31, fat: 3.6 },
+  { name: 'Brown Rice (1 cup)', calories: 215, carbs: 45, protein: 5, fat: 1.8 },
+  { name: 'Salad (mixed greens)', calories: 50, carbs: 10, protein: 2, fat: 0 },
+  { name: 'Avocado (half)', calories: 160, carbs: 9, protein: 2, fat: 15 },
+  { name: 'Salmon (100g)', calories: 208, carbs: 0, protein: 20, fat: 13 },
+  { name: 'Whole Wheat Bread (1)', calories: 80, carbs: 14, protein: 4, fat: 1 },
+  { name: 'Almonds (30g)', calories: 170, carbs: 6, protein: 6, fat: 15 },
+  { name: 'Protein Shake', calories: 120, carbs: 5, protein: 24, fat: 1 },
+  { name: 'Paneer (100g)', calories: 265, carbs: 1, protein: 18, fat: 20 },
+  { name: 'Dal (1 bowl)', calories: 180, carbs: 25, protein: 12, fat: 4 },
+  { name: 'Roti (1 medium)', calories: 120, carbs: 18, protein: 3, fat: 3.7 },
+  { name: 'Coffee with milk', calories: 60, carbs: 6, protein: 3, fat: 2.5 },
+  { name: 'Pizza Slice', calories: 285, carbs: 36, protein: 12, fat: 10 },
+];
+
+const EXERCISE_DB = [
+  { name: 'Walking (30 min)', calories: 120, duration: 30 },
+  { name: 'Brisk Walk (30 min)', calories: 160, duration: 30 },
+  { name: 'Running (30 min)', calories: 300, duration: 30 },
+  { name: 'Cycling (30 min)', calories: 240, duration: 30 },
+  { name: 'Yoga (30 min)', calories: 150, duration: 30 },
+  { name: 'Weight Training (30 min)', calories: 200, duration: 30 },
+  { name: 'HIIT (20 min)', calories: 220, duration: 20 },
+  { name: 'Jump Rope (15 min)', calories: 180, duration: 15 },
+];
+
+const QUOTES = [
+  "Small daily improvements are the key to long-term results.",
+  "Discipline is choosing what you want most over what you want now.",
+  "Progress, not perfection.",
+  "You don't have to be extreme, just consistent.",
+];
+
+// =============================================================
+// COACHING ENGINE (still rule-based; Day 3 swaps to LLM)
+// =============================================================
+function generateCoaching(stats, goal) {
+  const eaten = stats.calories;
+  const burned = stats.exerciseCalories;
+  const net = eaten - burned;
+  const diff = net - goal;
+  let status, verdict, color;
+
+  if (eaten === 0 && burned === 0) {
+    status = "Nothing logged yet";
+    verdict = "Start by adding your meals and any exercise.";
+    color = "neutral";
+  } else if (diff <= -100) {
+    status = `Under target by ${Math.abs(diff)} kcal`;
+    verdict = "Great — this deficit supports your weight-loss goal.";
+    color = "good";
+  } else if (diff < 100) {
+    status = `On target (${diff >= 0 ? '+' : ''}${diff} kcal)`;
+    verdict = "Right on plan — consistency like this builds results.";
+    color = "good";
+  } else if (diff < 300) {
+    status = `Over target by ${diff} kcal`;
+    verdict = "Slightly over — a short walk or smaller dinner tomorrow can balance it.";
+    color = "warn";
+  } else {
+    status = `Over target by ${diff} kcal`;
+    verdict = "Significantly over — try a 30-min walk and lighter portions tomorrow.";
+    color = "bad";
+  }
+  return { eaten, burned, net, goal, diff, status, verdict, color };
+}
+
+// =============================================================
+// AUTH SCREEN — sign up or log in
+// =============================================================
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null); setLoading(true);
+    try {
+      const fn = mode === 'login'
+        ? window.sb.auth.signInWithPassword({ email, password })
+        : window.sb.auth.signUp({ email, password });
+      const { data, error } = await fn;
+      if (error) throw error;
+      if (data.session) onAuth(data.session);
+      else setErr("Check your email to confirm sign-up.");
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6 mt-12">
+      <div className="bg-white rounded-2xl shadow-lg p-8 fade-in">
+        <div className="text-center mb-6">
+          <div className="text-3xl font-bold text-purple-700">FitTrack</div>
+          <div className="text-sm text-gray-500 mt-1">Track meals, hit your goals</div>
+        </div>
+
+        <div className="flex gap-2 mb-5 bg-gray-100 rounded-full p-1">
+          <button
+            className={`flex-1 py-2 rounded-full text-sm font-medium ${mode==='login' ? 'bg-white shadow text-purple-700' : 'text-gray-500'}`}
+            onClick={() => setMode('login')}>Log in</button>
+          <button
+            className={`flex-1 py-2 rounded-full text-sm font-medium ${mode==='signup' ? 'bg-white shadow text-purple-700' : 'text-gray-500'}`}
+            onClick={() => setMode('signup')}>Sign up</button>
+        </div>
+
+        <form onSubmit={submit} className="space-y-3">
+          <input type="email" placeholder="Email" required
+            value={email} onChange={e => setEmail(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+          <input type="password" placeholder="Password (min 6 chars)" required minLength={6}
+            value={password} onChange={e => setPassword(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+          {err && <div className="text-sm text-red-600 bg-red-50 p-2 rounded">{err}</div>}
+          <button type="submit" disabled={loading} className="btn-primary w-full py-3 rounded-lg text-white font-semibold">
+            {loading ? '…' : mode === 'login' ? 'Log in' : 'Create account'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================
+// VISUAL COMPONENTS (unchanged from v1)
+// =============================================================
+function CalorieRing({ eaten, goal }) {
+  const radius = 80;
+  const circumference = 2 * Math.PI * radius;
+  const progress = Math.min(eaten / goal, 1);
+  const offset = circumference * (1 - progress);
+  const left = Math.max(goal - eaten, 0);
+  const over = eaten > goal;
+  return (
+    <div className="relative flex items-center justify-center">
+      <svg width="200" height="200" className="transform -rotate-90">
+        <circle cx="100" cy="100" r={radius} stroke="#ede9fe" strokeWidth="14" fill="none" />
+        <circle cx="100" cy="100" r={radius} stroke={over ? "#ef4444" : "#7c3aed"} strokeWidth="14" fill="none"
+          strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} className="ring-progress" />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <div className="text-xs text-gray-500 uppercase tracking-wider">{over ? "Over by" : "Left"}</div>
+        <div className={`text-4xl font-bold ${over ? "text-red-500" : "text-purple-700"}`}>{over ? eaten - goal : left}</div>
+        <div className="text-xs text-gray-500">kcal</div>
+        <div className="text-xs text-gray-400 mt-1">{eaten} / {goal}</div>
+      </div>
+    </div>
+  );
+}
+
+function MacroBar({ label, value, goal, color }) {
+  const pct = Math.min((value / goal) * 100, 100);
+  return (
+    <div className="flex-1">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="text-gray-600 font-medium">{label}</span>
+        <span className="text-gray-500">{Math.round(value)}g / {goal}g</span>
+      </div>
+      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full macro-bar-fill ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function AddMealModal({ section, onClose, onAdd }) {
+  const [search, setSearch] = useState('');
+  const [customMode, setCustomMode] = useState(false);
+  const [custom, setCustom] = useState({ name: '', calories: '', carbs: '', protein: '', fat: '' });
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
+  // Day 5: semantic search with 300ms debounce so we don't burn API calls on every keystroke.
+  useEffect(() => {
+    const id = setTimeout(async () => {
+      if (search.trim().length < 2) { setResults([]); return; }
+      setSearching(true);
+      try {
+        const data = await api(`/search-food?q=${encodeURIComponent(search.trim())}`);
+        setResults(data);
+      } catch (e) { console.error('search failed', e); setResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  const filtered = results.length > 0 ? results : (search.trim().length < 2 ? FOOD_DB.slice(0, 8) : []);
+
+  const submitCustom = () => {
+    if (!custom.name || !custom.calories) return;
+    onAdd({ name: custom.name, calories: Number(custom.calories)||0, carbs: Number(custom.carbs)||0, protein: Number(custom.protein)||0, fat: Number(custom.fat)||0 });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col fade-in" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+          <div>
+            <div className="text-xs text-purple-600 uppercase tracking-wider">Add to</div>
+            <div className="text-lg font-bold text-gray-800 capitalize">{section}</div>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-100 text-gray-500">×</button>
+        </div>
+        <div className="px-5 pt-4 flex gap-2">
+          <button className={`px-4 py-2 rounded-full text-sm font-medium ${!customMode ? 'bg-purple-100 text-purple-700' : 'text-gray-500'}`} onClick={() => setCustomMode(false)}>Quick Add</button>
+          <button className={`px-4 py-2 rounded-full text-sm font-medium ${customMode ? 'bg-purple-100 text-purple-700' : 'text-gray-500'}`} onClick={() => setCustomMode(true)}>Custom</button>
+        </div>
+        {!customMode ? (
+          <div className="flex-1 overflow-y-auto p-5">
+            <input type="text" placeholder="Try 'chapati', 'high protein', 'spicy curry'..." value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg mb-1 focus:outline-none focus:border-purple-400" />
+            <div className="text-[10px] text-gray-400 mb-3 px-1">
+              {searching ? '🔍 searching by meaning…' : (results.length > 0 ? `${results.length} semantic match${results.length===1?'':'es'}` : 'Type 2+ chars for AI-powered search')}
+            </div>
+            <div className="space-y-2">
+              {filtered.map((f, i) => (
+                <button key={i} onClick={() => { onAdd(f); onClose(); }}
+                  className="w-full text-left p-3 rounded-lg hover:bg-purple-50 border border-gray-100 flex justify-between items-center">
+                  <div>
+                    <div className="font-medium text-gray-800 text-sm">{f.name}</div>
+                    <div className="text-xs text-gray-500">
+                      C {f.carbs}g · P {f.protein}g · F {f.fat}g
+                      {f.similarity != null && <span className="ml-2 text-purple-500">{Math.round(f.similarity * 100)}% match</span>}
+                    </div>
+                  </div>
+                  <div className="text-purple-700 font-bold text-sm">{f.calories}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-5 space-y-3">
+            <input placeholder="Food name" value={custom.name} onChange={e => setCustom({...custom, name: e.target.value})}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+            <input type="number" placeholder="Calories" value={custom.calories} onChange={e => setCustom({...custom, calories: e.target.value})}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+            <div className="grid grid-cols-3 gap-2">
+              <input type="number" placeholder="Carbs g" value={custom.carbs} onChange={e => setCustom({...custom, carbs: e.target.value})}
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+              <input type="number" placeholder="Protein g" value={custom.protein} onChange={e => setCustom({...custom, protein: e.target.value})}
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+              <input type="number" placeholder="Fat g" value={custom.fat} onChange={e => setCustom({...custom, fat: e.target.value})}
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-purple-400" />
+            </div>
+            <button onClick={submitCustom} className="btn-primary w-full py-3 rounded-lg text-white font-semibold">Add</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddExerciseModal({ onClose, onAdd }) {
+  const [search, setSearch] = useState('');
+  const [customMode, setCustomMode] = useState(false);
+  const [custom, setCustom] = useState({ name: '', calories: '', duration: '' });
+  const filtered = EXERCISE_DB.filter(e => e.name.toLowerCase().includes(search.toLowerCase())).slice(0, 8);
+
+  const submitCustom = () => {
+    if (!custom.name || !custom.calories) return;
+    onAdd({ name: custom.name, calories: Number(custom.calories)||0, duration: Number(custom.duration)||0 });
+    onClose();
+  };
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col fade-in" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+          <div className="text-lg font-bold text-gray-800">Exercise</div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-100 text-gray-500">×</button>
+        </div>
+        <div className="px-5 pt-4 flex gap-2">
+          <button className={`px-4 py-2 rounded-full text-sm font-medium ${!customMode ? 'bg-orange-100 text-orange-700' : 'text-gray-500'}`} onClick={() => setCustomMode(false)}>Quick Add</button>
+          <button className={`px-4 py-2 rounded-full text-sm font-medium ${customMode ? 'bg-orange-100 text-orange-700' : 'text-gray-500'}`} onClick={() => setCustomMode(true)}>Custom</button>
+        </div>
+        {!customMode ? (
+          <div className="flex-1 overflow-y-auto p-5">
+            <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg mb-3 focus:outline-none focus:border-orange-400" />
+            <div className="space-y-2">
+              {filtered.map((e, i) => (
+                <button key={i} onClick={() => { onAdd(e); onClose(); }}
+                  className="w-full text-left p-3 rounded-lg hover:bg-orange-50 border border-gray-100 flex justify-between items-center">
+                  <div>
+                    <div className="font-medium text-gray-800 text-sm">{e.name}</div>
+                    <div className="text-xs text-gray-500">{e.duration} min</div>
+                  </div>
+                  <div className="text-orange-600 font-bold text-sm">-{e.calories}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-5 space-y-3">
+            <input placeholder="Activity name" value={custom.name} onChange={e => setCustom({...custom, name: e.target.value})}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-orange-400" />
+            <input type="number" placeholder="Calories burned" value={custom.calories} onChange={e => setCustom({...custom, calories: e.target.value})}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-orange-400" />
+            <input type="number" placeholder="Duration (min)" value={custom.duration} onChange={e => setCustom({...custom, duration: e.target.value})}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-orange-400" />
+            <button onClick={submitCustom} className="w-full py-3 rounded-lg text-white font-semibold" style={{background:'linear-gradient(135deg,#f97316,#fb923c)'}}>Add</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MealSection({ name, icon, items, onAdd, onRemove }) {
+  const total = items.reduce((s, i) => s + Number(i.calories), 0);
+  return (
+    <div className="meal-card glass rounded-xl px-3 py-2.5 shadow-sm">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="text-lg">{icon}</span>
+          <div className="min-w-0">
+            <div className="font-semibold text-gray-800 capitalize text-sm">{name}</div>
+            <div className="text-[10px] text-gray-500">{items.length} item{items.length !== 1 ? 's' : ''} · {total} kcal</div>
+          </div>
+        </div>
+        <button onClick={onAdd} className="btn-primary w-7 h-7 rounded-full text-white flex items-center justify-center text-base font-light shrink-0">+</button>
+      </div>
+      {items.length > 0 && (
+        <div className="mt-1.5 space-y-0.5">
+          {items.map(item => (
+            <div key={item.id} className="flex justify-between items-center text-xs px-1.5 py-1 rounded hover:bg-purple-50 group">
+              <div className="flex-1 truncate text-gray-700">{item.name}</div>
+              <div className="text-purple-700 font-medium mx-1.5">{item.calories}</div>
+              <button onClick={() => onRemove(item.id)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 text-xs">✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExerciseSection({ items, onAdd, onRemove }) {
+  const total = items.reduce((s, i) => s + Number(i.calories), 0);
+  return (
+    <div className="meal-card glass rounded-xl px-3 py-2.5 shadow-sm">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="text-lg">🏃</span>
+          <div className="min-w-0">
+            <div className="font-semibold text-gray-800 text-sm">Exercise</div>
+            <div className="text-[10px] text-gray-500">{items.length} item{items.length !== 1 ? 's' : ''} · {total} kcal burned</div>
+          </div>
+        </div>
+        <button onClick={onAdd} className="w-7 h-7 rounded-full text-white flex items-center justify-center text-base font-light shrink-0"
+          style={{ background: 'linear-gradient(135deg,#f97316,#fb923c)' }}>+</button>
+      </div>
+      {items.length > 0 && (
+        <div className="mt-1.5 space-y-0.5">
+          {items.map(item => (
+            <div key={item.id} className="flex justify-between items-center text-xs px-1.5 py-1 rounded hover:bg-orange-50 group">
+              <div className="flex-1 truncate text-gray-700">{item.name}</div>
+              <div className="text-orange-600 font-medium mx-1.5">-{item.calories}</div>
+              <button onClick={() => onRemove(item.id)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 text-xs">✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DailySummary({ stats, goal }) {
+  const coach = useMemo(() => generateCoaching(stats, goal), [stats, goal]);
+  const gradients = {
+    good: 'from-emerald-500 to-green-600',
+    warn: 'from-amber-500 to-orange-500',
+    bad: 'from-rose-500 to-red-600',
+    neutral: 'from-purple-600 to-violet-700',
+  };
+  const bg = gradients[coach.color] || gradients.neutral;
+  return (
+    <div className={`bg-gradient-to-br ${bg} text-white rounded-2xl p-5 shadow-lg h-full flex flex-col`}>
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-2xl">🎯</span>
+        <h3 className="font-bold text-lg">Daily Summary</h3>
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <div className="bg-white bg-opacity-15 rounded-xl p-3 text-center">
+          <div className="text-[10px] opacity-80 uppercase tracking-wider">Target</div>
+          <div className="text-2xl font-bold">{coach.goal}</div>
+        </div>
+        <div className="bg-white bg-opacity-15 rounded-xl p-3 text-center">
+          <div className="text-[10px] opacity-80 uppercase tracking-wider">Eaten</div>
+          <div className="text-2xl font-bold">{coach.eaten}</div>
+          <div className="text-[10px] opacity-70">-{coach.burned} burned</div>
+        </div>
+        <div className="bg-white bg-opacity-15 rounded-xl p-3 text-center">
+          <div className="text-[10px] opacity-80 uppercase tracking-wider">Net</div>
+          <div className="text-2xl font-bold">{coach.net}</div>
+        </div>
+      </div>
+      <div className="bg-white bg-opacity-15 rounded-xl p-4 flex-1 flex flex-col justify-center">
+        <div className="font-bold text-lg mb-1">{coach.status}</div>
+        <div className="text-sm opacity-95">{coach.verdict}</div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================
+// AI COACH TAB — separate full-width strip at the bottom
+// =============================================================
+function AICoachTab({ coachData, coachLoading, onRefresh }) {
+  return (
+    <div className="glass rounded-2xl p-4 shadow-lg">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-2xl">🤖</span>
+          <div>
+            <div className="font-bold text-gray-800 text-base leading-tight">AI Coach</div>
+            <div className="text-[10px] text-gray-500">Powered by Claude</div>
+          </div>
+        </div>
+
+        <div className="flex-1 px-4">
+          {coachLoading ? (
+            <div className="text-sm text-purple-600 italic">Analyzing your day…</div>
+          ) : coachData?.advice ? (
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <div className="text-xs uppercase tracking-wider text-purple-600 font-semibold">{coachData.advice.status}</div>
+                <div className="text-sm text-gray-700 mt-0.5">{coachData.advice.verdict}</div>
+              </div>
+              <div className="flex-1 border-l border-purple-200 pl-4">
+                <div className="text-xs uppercase tracking-wider text-orange-600 font-semibold">💡 Tomorrow</div>
+                <div className="text-sm text-gray-700 mt-0.5">{coachData.advice.tip}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-gray-500 italic">Log your meals, then ask the AI for personalised coaching.</div>
+          )}
+        </div>
+
+        <button onClick={onRefresh} disabled={coachLoading}
+          className="btn-primary text-white px-5 py-2.5 rounded-full text-sm font-semibold shrink-0 disabled:opacity-50">
+          {coachLoading ? 'Thinking…' : coachData ? 'Refresh' : 'Get coaching'}
+        </button>
+      </div>
+
+      {coachData?.advice && (
+        <div className="text-[10px] text-gray-400 mt-2 text-center">
+          {coachData.model} · {coachData.usage.input_tokens}→{coachData.usage.output_tokens} tokens · severity: {coachData.advice.severity}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================
+// MAIN APP — now backed by FastAPI + Supabase
+// =============================================================
+function App() {
+  const [session, setSession] = useState(null);
+  const [sbReady, setSbReady] = useState(!!window.sb);
+  const [loading, setLoading] = useState(true);
+  const [goal, setGoal] = useState(1800);
+  const [meals, setMeals] = useState({ breakfast: [], lunch: [], dinner: [], snacks: [] });
+  const [exercises, setExercises] = useState([]);
+  const [modalSection, setModalSection] = useState(null);
+  const [exerciseModalOpen, setExerciseModalOpen] = useState(false);
+  const [quote] = useState(QUOTES[Math.floor(Math.random() * QUOTES.length)]);
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [coachData, setCoachData] = useState(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+
+  // ---- Wait for Supabase client to load ----
+  useEffect(() => {
+    if (window.sb) { setSbReady(true); return; }
+    const handler = () => setSbReady(true);
+    window.addEventListener('sb-ready', handler);
+    return () => window.removeEventListener('sb-ready', handler);
+  }, []);
+
+  // ---- Check session on mount, subscribe to changes ----
+  useEffect(() => {
+    if (!sbReady) return;
+    window.sb.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setLoading(false);
+    });
+    const { data: sub } = window.sb.auth.onAuthStateChange((_event, sess) => setSession(sess));
+    return () => sub.subscription.unsubscribe();
+  }, [sbReady]);
+
+  // ---- Load today's data from API when session appears ----
+  const reload = async () => {
+    if (!session) return;
+    try {
+      const day = todayKey();
+      const [m, e] = await Promise.all([
+        api(`/meals?day=${day}`),
+        api(`/exercises?day=${day}`),
+      ]);
+      const grouped = { breakfast: [], lunch: [], dinner: [], snacks: [] };
+      m.forEach(row => grouped[row.section]?.push(row));
+      setMeals(grouped);
+      setExercises(e);
+    } catch (err) { console.error(err); }
+  };
+  useEffect(() => { if (session) reload(); }, [session]);
+
+  const addMeal = async (section, item) => {
+    await api('/meals', { method: 'POST', body: JSON.stringify({ section, ...item }) });
+    reload();
+  };
+  const removeMeal = async (id) => {
+    await api(`/meals/${id}`, { method: 'DELETE' });
+    reload();
+  };
+  const addExercise = async (item) => {
+    await api('/exercises', { method: 'POST', body: JSON.stringify(item) });
+    reload();
+  };
+  const removeExercise = async (id) => {
+    await api(`/exercises/${id}`, { method: 'DELETE' });
+    reload();
+  };
+
+  // ---- Day 3: call the Claude-powered coach ----
+  const fetchCoach = async () => {
+    setCoachLoading(true);
+    try {
+      const meal_summary = Object.entries(meals)
+        .filter(([_, items]) => items.length)
+        .map(([sec, items]) => `${sec}: ${items.map(i => i.name).join(', ')}`)
+        .join('; ');
+      const data = await api('/coach', {
+        method: 'POST',
+        body: JSON.stringify({
+          goal,
+          eaten: stats.calories,
+          burned: stats.exerciseCalories,
+          protein: stats.protein,
+          carbs: stats.carbs,
+          fat: stats.fat,
+          meal_summary,
+        }),
+      });
+      setCoachData(data);
+    } catch (e) { console.error(e); alert('Coach unavailable: ' + e.message); }
+    finally { setCoachLoading(false); }
+  };
+
+  const stats = useMemo(() => {
+    const all = [...meals.breakfast, ...meals.lunch, ...meals.dinner, ...meals.snacks];
+    return {
+      calories: all.reduce((s,i) => s + Number(i.calories), 0),
+      carbs:    all.reduce((s,i) => s + Number(i.carbs || 0), 0),
+      protein:  all.reduce((s,i) => s + Number(i.protein || 0), 0),
+      fat:      all.reduce((s,i) => s + Number(i.fat || 0), 0),
+      exerciseCalories: exercises.reduce((s,i) => s + Number(i.calories), 0),
+    };
+  }, [meals, exercises]);
+
+  const macroGoals = {
+    protein: Math.round(goal * 0.30 / 4),
+    carbs:   Math.round(goal * 0.45 / 4),
+    fat:     Math.round(goal * 0.25 / 9),
+  };
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+  // ---- Render gates ----
+  if (loading) return <div className="text-center mt-20 text-purple-600">Loading…</div>;
+  if (!session) return <AuthScreen onAuth={setSession} />;
+
+  // ---- Authenticated app ----
+  return (
+    <div className="min-h-screen w-full p-3 flex flex-col">
+      {/* TOP BAR */}
+      <div className="w-full flex justify-between items-center mb-3 shrink-0 fade-in">
+        <div className="flex items-baseline gap-3">
+          <div className="text-xl font-extrabold text-white tracking-tight">FitTrack</div>
+          <div className="text-xs text-white/70">{today}</div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-white/80">{session.user.email}</div>
+          <button onClick={() => window.sb.auth.signOut()}
+            className="text-xs text-white/80 hover:text-white px-3 py-1 rounded-full glass-dark">
+            Log out
+          </button>
+        </div>
+      </div>
+
+      {/* MAIN 3-COLUMN GRID — fills remaining vertical space */}
+      <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-3 fade-in flex-1 min-h-0">
+
+        {/* LEFT — Calorie ring + macros + quote */}
+        <div className="lg:col-span-4 flex flex-col gap-3 min-h-0">
+          <div className="glass rounded-2xl p-5 shadow-lg flex-1 flex flex-col justify-center">
+            <div className="flex items-center gap-4">
+              <div className="shrink-0">
+                <CalorieRing eaten={Math.max(stats.calories - stats.exerciseCalories, 0)} goal={goal} />
+              </div>
+              <div className="flex-1 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] text-gray-500 uppercase tracking-wider">Daily goal</span>
+                  {editingGoal ? (
+                    <input type="number" value={goal} autoFocus
+                      onChange={e => setGoal(Number(e.target.value) || 1800)}
+                      onBlur={() => setEditingGoal(false)}
+                      className="w-20 px-2 py-0.5 border border-purple-300 rounded text-right text-xs" />
+                  ) : (
+                    <button onClick={() => setEditingGoal(true)} className="text-xs font-bold text-purple-700">{goal} kcal ✏️</button>
+                  )}
+                </div>
+                <MacroBar label="Carbs"   value={stats.carbs}   goal={macroGoals.carbs}   color="bg-blue-400" />
+                <MacroBar label="Protein" value={stats.protein} goal={macroGoals.protein} color="bg-emerald-400" />
+                <MacroBar label="Fat"     value={stats.fat}     goal={macroGoals.fat}     color="bg-amber-400" />
+              </div>
+            </div>
+          </div>
+
+          <div className="glass rounded-2xl p-4 shadow-lg shrink-0">
+            <div className="text-[10px] text-purple-500 uppercase tracking-wider mb-0.5">Daily motivation</div>
+            <div className="font-medium quote-shimmer text-sm leading-snug">"{quote}"</div>
+          </div>
+        </div>
+
+        {/* MIDDLE — Meals + exercise (stretch to fill column) */}
+        <div className="lg:col-span-4 flex flex-col gap-2 min-h-0">
+          <MealSection name="breakfast" icon="🍳" items={meals.breakfast} onAdd={() => setModalSection('breakfast')} onRemove={removeMeal} />
+          <MealSection name="lunch"     icon="🥗" items={meals.lunch}     onAdd={() => setModalSection('lunch')}     onRemove={removeMeal} />
+          <MealSection name="dinner"    icon="🍛" items={meals.dinner}    onAdd={() => setModalSection('dinner')}    onRemove={removeMeal} />
+          <MealSection name="snacks"    icon="🍎" items={meals.snacks}    onAdd={() => setModalSection('snacks')}    onRemove={removeMeal} />
+          <ExerciseSection items={exercises} onAdd={() => setExerciseModalOpen(true)} onRemove={removeExercise} />
+        </div>
+
+        {/* RIGHT — Daily summary */}
+        <div className="lg:col-span-4 flex flex-col min-h-0">
+          <DailySummary stats={stats} goal={goal} />
+        </div>
+
+      </div>
+
+      {/* BOTTOM — AI Coach tab spanning full width */}
+      <div className="w-full mt-3 shrink-0 fade-in">
+        <AICoachTab coachData={coachData} coachLoading={coachLoading} onRefresh={fetchCoach} />
+      </div>
+
+      {modalSection && (
+        <AddMealModal section={modalSection} onClose={() => setModalSection(null)}
+          onAdd={item => addMeal(modalSection, item)} />
+      )}
+      {exerciseModalOpen && (
+        <AddExerciseModal onClose={() => setExerciseModalOpen(false)} onAdd={addExercise} />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
