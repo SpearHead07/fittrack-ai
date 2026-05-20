@@ -6,13 +6,13 @@ Run:
     uvicorn main:app --reload
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Depends, Header # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
-from supabase import create_client, Client
-from anthropic import AsyncAnthropic
-import voyageai
+from supabase import create_client, Client # type: ignore
+from anthropic import AsyncAnthropic # type: ignore
+import voyageai # type: ignore
 from dotenv import load_dotenv
 import os
 import json
@@ -20,10 +20,12 @@ import json
 # ---- Setup ----
 load_dotenv()
 
+# Anon client: used only for JWT validation — Supabase auth.get_user() requires the anon key.
 supabase_anon: Client = create_client(
     os.environ["SUPABASE_URL"],
     os.environ["SUPABASE_KEY"],
 )
+# Service-role client: bypasses Row Level Security so the API can read/write any user's rows.
 supabase: Client = create_client(
     os.environ["SUPABASE_URL"],
     os.environ["SUPABASE_SERVICE_KEY"],
@@ -54,7 +56,7 @@ def get_current_user(authorization: str = Header(None)) -> str:
             raise HTTPException(401, "Invalid token")
         return user.id
     except HTTPException:
-        raise
+        raise  # Re-raise our own 401s so the outer except can't swallow them.
     except Exception:
         raise HTTPException(401, "Invalid or expired token")
 
@@ -100,6 +102,7 @@ def health():
 # ---- Meals ----
 @app.post("/meals")
 def create_meal(meal: MealIn, user_id: str = Depends(get_current_user)):
+    # exclude_none=True keeps optional fields out of the payload so DB defaults aren't overwritten.
     payload = meal.model_dump(exclude_none=True)
     payload["user_id"] = user_id
     return supabase.table("meals").insert(payload).execute().data[0]
@@ -119,6 +122,7 @@ def delete_meal(meal_id: str, user_id: str = Depends(get_current_user)):
 # ---- Exercises ----
 @app.post("/exercises")
 def create_exercise(ex: ExerciseIn, user_id: str = Depends(get_current_user)):
+    # exclude_none=True keeps optional fields out of the payload so DB defaults aren't overwritten.
     payload = ex.model_dump(exclude_none=True)
     payload["user_id"] = user_id
     return supabase.table("exercises").insert(payload).execute().data[0]
@@ -174,6 +178,7 @@ async def coach(payload: CoachInput, user_id: str = Depends(get_current_user)):
             system=COACH_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
             tools=[COACH_TOOL],
+            # Force Claude to call exactly this tool — prevents a plain-text reply that bypasses validation.
             tool_choice={"type": "tool", "name": "provide_coaching"},
         )
     except Exception as e:
@@ -355,10 +360,10 @@ async def quick_log(payload: AgentInput, user_id: str = Depends(get_current_user
             messages=messages,
         )
 
-        # Remember Claude's turn in the conversation history
+        # Append Claude's full response as the next assistant turn so the model sees its own prior tool calls.
         messages.append({
             "role": "assistant",
-            "content": [block.model_dump() for block in response.content],
+            "content": [block.model_dump() for block in response.content], # type: ignore
         })
 
         if response.stop_reason == "end_turn":
@@ -383,11 +388,11 @@ async def quick_log(payload: AgentInput, user_id: str = Depends(get_current_user
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
-                "content": json.dumps(result, default=str),
+                "content": json.dumps(result, default=str),  # default=str serializes dates/UUIDs from Supabase.
                 "is_error": is_error,
             })
 
         # Feed all tool results back to Claude as one user message
-        messages.append({"role": "user", "content": tool_results})
+        messages.append({"role": "user", "content": tool_results}) # type: ignore
 
     raise HTTPException(500, "Agent exceeded max iterations")
