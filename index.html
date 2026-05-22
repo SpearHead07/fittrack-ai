@@ -271,20 +271,19 @@ function AddMealModal({ section, onClose, onAdd }) {
 
   // Day 5: semantic search with 300ms debounce so we don't burn API calls on every keystroke.
   useEffect(() => {
-  const id = setTimeout(async () => {
-    if (search.trim().length < 2) { setResults([]); return; }
-    if (searching) return;   // ← skip if previous request still running
-    setSearching(true);
-    try {
-      const data = await api(`/search-food?q=${encodeURIComponent(search.trim())}`);
-      setResults(data);
-    } catch (e) { console.error('search failed', e); setResults([]); }
-    finally { setSearching(false); }
-  }, 600);   // ← increased from 300 to 600
-  return () => clearTimeout(id);
-}, [search]);
+    const id = setTimeout(async () => {
+      if (search.trim().length < 2) { setResults([]); return; }
+      setSearching(true);
+      try {
+        const data = await api(`/search-food?q=${encodeURIComponent(search.trim())}`);
+        setResults(data);
+      } catch (e) { console.error('search failed', e); setResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => clearTimeout(id);
+  }, [search]);
 
-  const filtered = search.trim().length < 2 ? [] : results;
+  const filtered = results.length > 0 ? results : (search.trim().length < 2 ? FOOD_DB.slice(0, 8) : []);
 
   const submitCustom = () => {
     if (!custom.name || !custom.calories) return;
@@ -568,6 +567,9 @@ function App() {
   const [editingGoal, setEditingGoal] = useState(false);
   const [coachData, setCoachData] = useState(null);
   const [coachLoading, setCoachLoading] = useState(false);
+  const [smartLogText, setSmartLogText] = useState('');
+  const [smartLogLoading, setSmartLogLoading] = useState(false);
+  const [smartLogResult, setSmartLogResult] = useState(null);
 
   // ---- Wait for Supabase client to load ----
   useEffect(() => {
@@ -647,6 +649,26 @@ function App() {
     finally { setCoachLoading(false); }
   };
 
+
+  // ---- Day 7: Smart log ----
+  const handleSmartLog = async () => {
+    if (!smartLogText.trim() || smartLogLoading) return;
+    setSmartLogLoading(true);
+    setSmartLogResult(null);
+    try {
+      const data = await api("/quick-log", {
+        method: "POST",
+        body: JSON.stringify({ text: smartLogText.trim() }),
+      });
+      setSmartLogResult({ success: true, summary: data.summary, actions: data.actions });
+      setSmartLogText("");
+      reload();
+    } catch (e) {
+      setSmartLogResult({ success: false, summary: e.message });
+    } finally {
+      setSmartLogLoading(false);
+    }
+  };
   const stats = useMemo(() => {
     const all = [...meals.breakfast, ...meals.lunch, ...meals.dinner, ...meals.snacks];
     return {
@@ -692,6 +714,13 @@ function App() {
 
         {/* LEFT — Calorie ring + macros + quote */}
         <div className="lg:col-span-4 flex flex-col gap-3 min-h-0">
+          <SmartLogBar
+            text={smartLogText}
+            setText={setSmartLogText}
+            onSubmit={handleSmartLog}
+            loading={smartLogLoading}
+            result={smartLogResult}
+          />
           <div className="glass rounded-2xl p-5 shadow-lg flex-1 flex flex-col justify-center">
             <div className="flex items-center gap-4">
               <div className="shrink-0">
@@ -749,6 +778,45 @@ function App() {
       )}
       {exerciseModalOpen && (
         <AddExerciseModal onClose={() => setExerciseModalOpen(false)} onAdd={addExercise} />
+      )}
+    </div>
+  );
+}
+
+// =============================================================
+// SMART LOG BAR — natural language logging pill
+// =============================================================
+function SmartLogBar({ text, setText, onSubmit, loading, result }) {
+  const handleKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSubmit(); }
+  };
+  return (
+    <div className="glass rounded-2xl px-4 py-3 shadow-lg shrink-0">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+          style={{ background: 'linear-gradient(135deg,#7c3aed,#a855f7)' }}>
+          <span className="text-sm">🤖</span>
+        </div>
+        <input
+          type="text"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder='e.g. "had 2 rotis and banana, ran 5km"'
+          disabled={loading}
+          className="flex-1 bg-transparent text-sm text-gray-700 placeholder-gray-400 outline-none"
+        />
+        <button
+          onClick={onSubmit}
+          disabled={loading || !text.trim()}
+          className="btn-primary text-white px-4 py-1.5 rounded-full text-xs font-semibold shrink-0 disabled:opacity-40">
+          {loading ? 'Logging…' : 'Log →'}
+        </button>
+      </div>
+      {result && (
+        <div className={`mt-2 text-xs px-2 py-1.5 rounded-lg ${result.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+          {result.success ? '✅ ' : '❌ '}{result.summary}
+        </div>
       )}
     </div>
   );
