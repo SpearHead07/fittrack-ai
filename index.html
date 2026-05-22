@@ -271,17 +271,18 @@ function AddMealModal({ section, onClose, onAdd }) {
 
   // Day 5: semantic search with 300ms debounce so we don't burn API calls on every keystroke.
   useEffect(() => {
-    const id = setTimeout(async () => {
-      if (search.trim().length < 2) { setResults([]); return; }
-      setSearching(true);
-      try {
-        const data = await api(`/search-food?q=${encodeURIComponent(search.trim())}`);
-        setResults(data);
-      } catch (e) { console.error('search failed', e); setResults([]); }
-      finally { setSearching(false); }
-    }, 300);
-    return () => clearTimeout(id);
-  }, [search]);
+  const id = setTimeout(async () => {
+    if (search.trim().length < 2) { setResults([]); return; }
+    if (searching) return;   // ← skip if previous request still running
+    setSearching(true);
+    try {
+      const data = await api(`/search-food?q=${encodeURIComponent(search.trim())}`);
+      setResults(data);
+    } catch (e) { console.error('search failed', e); setResults([]); }
+    finally { setSearching(false); }
+  }, 600);   // ← increased from 300 to 600
+  return () => clearTimeout(id);
+}, [search]);
 
   const filtered = search.trim().length < 2 ? [] : results;
 
