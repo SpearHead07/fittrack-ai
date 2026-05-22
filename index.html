@@ -283,7 +283,7 @@ function AddMealModal({ section, onClose, onAdd }) {
     return () => clearTimeout(id);
   }, [search]);
 
-  const filtered = results.length > 0 ? results : (search.trim().length < 2 ? FOOD_DB.slice(0, 8) : []);
+  const filtered = search.trim().length < 2 ? [] : results;
 
   const submitCustom = () => {
     if (!custom.name || !custom.calories) return;

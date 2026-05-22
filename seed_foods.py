@@ -48,6 +48,8 @@ FOODS = [
      "description": "Poha flattened rice Indian breakfast snack onion peanut light"},
     {"name": "Upma (1 bowl)", "calories": 230, "carbs": 38, "protein": 6, "fat": 6,
      "description": "Upma South Indian breakfast semolina rava savory porridge"},
+    {"name": "Chapati", "calories": 104, "carbs": 18, "protein": 3, "fat": 3,
+     "description": "Chapati whole wheat flatbread Indian bread roti unleavened"}, 
 
     # --- Mains / curries / proteins ---
     {"name": "Dal (1 bowl)", "calories": 180, "carbs": 25, "protein": 12, "fat": 4,
