@@ -31,6 +31,7 @@ jobs:
           app_location: "/"        # keep as is
           api_location: ""         # keep as is
           output_location: ""      # ← change this to empty string
+          skip_app_build: true
           ###### End of Repository/Build Configurations ######
 
   close_pull_request_job:
