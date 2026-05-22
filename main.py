@@ -351,14 +351,17 @@ async def quick_log(payload: AgentInput, user_id: str = Depends(get_current_user
     messages = [{"role": "user", "content": payload.text}]
     actions = []
 
-    for step in range(8):                                # safety cap
-        response = await claude.messages.create(
+    for step in range(8):
+        try:
+            response = await claude.messages.create(
             model="claude-haiku-4-5",
             max_tokens=1024,
             system=AGENT_SYSTEM_PROMPT,
             tools=AGENT_TOOLS,
             messages=messages,
         )
+        except Exception as e:
+            raise HTTPException(503, f"AI service temporarily busy. Please try again in a moment.")
 
         # Append Claude's full response as the next assistant turn so the model sees its own prior tool calls.
         messages.append({
